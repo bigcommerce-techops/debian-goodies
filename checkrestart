@@ -59,7 +59,7 @@ def find_cmd(cmd):
      return 1
 
 def usage():
-    sys.stderr.write('usage: checkrestart [-vhpa] [-bblacklist] [-iignore]\n')
+    sys.stderr.write('usage: checkrestart [-vhpa] [-bblacklist] [-iignore] [-eexcludepid]\n')
 
 def main():
     global lc_all_c_env, file_query_check
@@ -72,10 +72,11 @@ def main():
     blacklistFiles = []
     blacklist = []
     ignorelist = [ 'util-linux', 'screen' ]
+    excludepidlist = []
 
 # Process options
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvpab:i:", ["help", "verbose", "packages", "all", "blacklist", "ignore"])
+        opts, args = getopt.getopt(sys.argv[1:], "hvpab:i:e:", ["help", "verbose", "packages", "all", "blacklist", "ignore", "excludepid"])
     except getopt.GetoptError, err:
         # print help information and exit:
         print str(err) # will print something like "option -x not recognized"
@@ -101,6 +102,8 @@ def main():
         elif o in ("-a", "--all"):
             allFiles = True
             onlyPackageFiles = False
+        elif o in ("-e", "--excludepid"):
+            excludepidlist.append(a)
         elif o in ("-b", "--blacklist"):
             blacklistFiles.append(a)
             onlyPackageFiles = False
@@ -128,7 +131,7 @@ def main():
 # TODO - This does not work yet:
 #        toRestart = psdelcheck()
 
-    toRestart = lsofcheck(blacklist = blacklist)
+    toRestart = lsofcheck(blacklist = blacklist, excludepidlist = excludepidlist)
 
     print "Found %d processes using old versions of upgraded files" % len(toRestart)
 
@@ -274,10 +277,17 @@ def main():
         for process in package.processes:
             print "\t%s\t%s" % (process.pid,process.program)
 
-def lsofcheck(blacklist = None):
+def lsofcheck(blacklist = None, excludepidlist = None):
     processes = {}
+    lsofcmd = 'lsof +XL -F nf'
 
-    for line in os.popen('lsof +XL -F nf').readlines():
+    if excludepidlist:
+        lsofcmd_ext = ' -p \''
+        for excludepid in excludepidlist:
+            lsofcmd_ext = lsofcmd_ext + '^' + excludepid + ','
+        lsofcmd = lsofcmd + lsofcmd_ext.strip(',') + '\''
+
+    for line in os.popen(lsofcmd).readlines():
         field, data = line[0], line[1:-1]
 
         if field == 'p':
