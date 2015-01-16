@@ -76,6 +76,12 @@ when looking for open files. This can speed up checkrestart on systems with a
 large number of open files
 .TP
 
+.TP
+.BI -e\ pid, --excludepid=pid
+Exclude process with
+.I pid
+when searching for open files
+
 .SH EXIT STATUS
 
 The program will exit with error (1) if a non-root user tries to run it. Otherwise,
