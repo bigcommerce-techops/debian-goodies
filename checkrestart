@@ -60,7 +60,7 @@ def find_cmd(cmd):
      return 1
 
 def usage():
-    sys.stderr.write('usage: checkrestart [-vhpa] [-bblacklist] [-iignore]\n')
+    sys.stderr.write('usage: checkrestart [-vhpa] [-bblacklist] [-iignore] [-eexcludepid]\n')
 
 def main():
     global lc_all_c_env, file_query_check
@@ -72,11 +72,12 @@ def main():
     file_query_check = {}
     blacklistFiles = []
     blacklist = []
-    ignorelist = [ 'screen' ]
+    ignorelist = [ 'util-linux', 'screen' ]
+    excludepidlist = []
 
 # Process options
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvpab:i:", ["help", "verbose", "packages", "all", "blacklist", "ignore"])
+        opts, args = getopt.getopt(sys.argv[1:], "hvpab:i:e:", ["help", "verbose", "packages", "all", "blacklist", "ignore", "excludepid"])
     except getopt.GetoptError, err:
         # print help information and exit:
         print str(err) # will print something like "option -x not recognized"
@@ -102,6 +103,8 @@ def main():
         elif o in ("-a", "--all"):
             allFiles = True
             onlyPackageFiles = False
+        elif o in ("-e", "--excludepid"):
+            excludepidlist.append(a)
         elif o in ("-b", "--blacklist"):
             blacklistFiles.append(a)
             onlyPackageFiles = False
@@ -131,7 +134,7 @@ def main():
 # TODO - This does not work yet:
 #        toRestart = psdelcheck()
 
-    toRestart = lsofcheck(blacklist = blacklist)
+    toRestart = lsofcheck(blacklist = blacklist, excludepidlist = excludepidlist)
 
     print "Found %d processes using old versions of upgraded files" % len(toRestart)
 
@@ -277,10 +280,17 @@ def main():
         for process in package.processes:
             print "\t%s\t%s" % (process.pid,process.program)
 
-def lsofcheck(blacklist = None):
+def lsofcheck(blacklist = None, excludepidlist = None):
     processes = {}
+    lsofcmd = 'lsof +XL -F nf'
 
-    for line in os.popen('lsof +XL -F nf').readlines():
+    if excludepidlist:
+        lsofcmd_ext = ' -p \''
+        for excludepid in excludepidlist:
+            lsofcmd_ext = lsofcmd_ext + '^' + excludepid + ','
+        lsofcmd = lsofcmd + lsofcmd_ext.strip(',') + '\''
+
+    for line in os.popen(lsofcmd).readlines():
         field, data = line[0], line[1:-1]
 
         if field == 'p':
@@ -371,10 +381,10 @@ def isdeletedFile (f, blacklist = None):
             if p.search(f):
                 return 0
     # We don't care about log files
-    if f.startswith('/var/log/') or f.startswith('/var/local/log/'):
+    if f.startswith('/var/log/'):
         return 0
     # Or about files under temporary locations
-    if f.startswith('/var/run/') or f.startswith('/var/local/run/'):
+    if f.startswith('/var/run/'):
         return 0
     # Or about files under /tmp
     if f.startswith('/tmp/'):
@@ -388,8 +398,8 @@ def isdeletedFile (f, blacklist = None):
     # Or about files under /drm
     if f.startswith('/drm'):
         return 0
-    # Or about files under /var/tmp and /var/local/tmp
-    if f.startswith('/var/tmp/') or f.startswith('/var/local/tmp/'):
+    # Or about files under /var/tmp
+    if f.startswith('/var/tmp/'):
         return 0
     # Or /dev/zero
     if f.startswith('/dev/zero'):
@@ -535,33 +545,10 @@ class Process:
                     # only match program in /usr (ex.: /usr/sbin/smokeping)
                     # ignore child, etc.
                     #m = re.search(r'^(([/]\w*){1,5})\s.*$', cmdline.read())
-                    # Split by null-bytes, see proc(5)
-                    data = cmdline.read().split('\x00')
-                    # Last character should be null-byte, too, see proc(5)
-                    if not data[-1]: data.pop()
-                    # Spamd sets $0 wrongly, see
-                    # https://bugzilla.redhat.com/show_bug.cgi?id=755644
-                    # i.e. the blank after spamd is relevant in case
-                    # this will be fixed in the future.
-                    m = re.match("^/usr/sbin/spamd |^spamd ", data[0])
+                    m = re.search(r'^(/usr/\S+)$', cmdline.read())
                     if m:
-                        self.program = "/usr/sbin/spamd"
-                    else:
-                        # Strip first value, the interpreter
-                        data.pop(0)
-                        # Check if something's left after the interpreter, see #715000
-                        if data:
-                            # Strip all options following the interpreter, e.g. python's -O
-                            m = re.match("^-", data[0])
-                            while (m):
-                                data.pop(0)
-                                m = re.match("^-", data[0])
-                            if data and data[0]: data = data[0]
-                            data = self.which(data)
-                            m = re.search(r'^(/usr/\S+)$', data)
-                            if m:
-                                # store the real full path of script as the program
-                                self.program = m.group(1)
+                        # store the real full path of script as the program
+                        self.program = m.group(1)
         except OSError, e:
             if e.errno != errno.ENOENT:
                 if self.pid == 1:
@@ -570,20 +557,6 @@ class Process:
                     sys.stderr.write('ERROR: Failed to read pid %d' % self.pid)
                     raise
         self.program = self.cleanFile(self.program)
-
-    def which(self, program):
-        if os.path.isabs(program):
-            return program
-        path = os.environ.get("PATH", os.defpath).split(os.pathsep)
-        seen = set()
-        for dir in path:
-            dir = os.path.normcase(os.path.abspath(dir))
-            if not dir in seen:
-                seen.add(dir)
-                name = os.path.join(dir, program)
-                if os.path.exists(name) and os.access(name, os.F_OK|os.X_OK) and not os.path.isdir(name):
-                    return name
-        return program
 
     def cleanFile(self, f):
         # /proc/pid/exe has all kinds of junk in it sometimes
